@@ -17,6 +17,11 @@
 This package contains common code and utilities used by Google client libraries.
 """
 
+import sys
+print("Starting vchudnov local instance of api_core", file=sys.stderr)
+del sys
+
+
 from google.api_core import _python_package_support
 from google.api_core import _python_version_support
 from google.api_core import version as api_core_version
@@ -39,3 +44,4 @@ DependencyConstraint = _python_package_support.DependencyConstraint
 # perform version checks against api_core, and emit warnings if needed
 check_python_version(package="google.api_core")
 check_dependency_versions("google.api_core")
+
