@@ -22,6 +22,7 @@ import enum
 import functools
 
 from google.api_core import grpc_helpers
+from google.api_core import otel
 from google.api_core.gapic_v1 import client_info
 from google.api_core.timeout import TimeToDeadlineTimeout
 
@@ -128,7 +129,15 @@ class _GapicCallable(object):
         if self._compression is not None:
             kwargs["compression"] = compression
 
-        return wrapped_func(*args, **kwargs)
+        # Use the name of the target if it's available, otherwise fallback to its class name.
+        method_name = getattr(self._target, "__name__", self._target.__class__.__name__)
+
+        token = otel.set_baggage("method", method_name)
+        try:
+            with otel.start_span(method_name, span_type="logical"):
+                return wrapped_func(*args, **kwargs)
+        finally:
+            otel.detach_context(token)
 
 
 def wrap_method(

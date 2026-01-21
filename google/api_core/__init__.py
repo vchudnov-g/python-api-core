@@ -45,3 +45,5 @@ DependencyConstraint = _python_package_support.DependencyConstraint
 check_python_version(package="google.api_core")
 check_dependency_versions("google.api_core")
 
+from google.api_core import otel
+

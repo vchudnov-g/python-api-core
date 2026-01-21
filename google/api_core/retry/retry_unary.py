@@ -68,6 +68,7 @@ from google.api_core.retry.retry_base import _retry_error_helper
 from google.api_core.retry.retry_base import exponential_sleep_generator
 from google.api_core.retry.retry_base import build_retry_error
 from google.api_core.retry.retry_base import RetryFailureReason
+from google.api_core import otel
 
 
 if TYPE_CHECKING:
@@ -142,29 +143,33 @@ def retry_target(
 
     # continue trying until an attempt completes, or a terminal exception is raised in _retry_error_helper
     # TODO: support max_attempts argument: https://github.com/googleapis/python-api-core/issues/535
-    while True:
-        try:
-            result = target()
-            if inspect.isawaitable(result):
-                warnings.warn(_ASYNC_RETRY_WARNING)
-            return result
+    method_name = otel.get_baggage("method") or "rpc"
+    span_name = f"{method_name}.attempt"
 
-        # pylint: disable=broad-except
-        # This function explicitly must deal with broad exceptions.
-        except Exception as exc:
-            # defer to shared logic for handling errors
-            next_sleep = _retry_error_helper(
-                exc,
-                deadline,
-                sleep_iter,
-                error_list,
-                predicate,
-                on_error,
-                exception_factory,
-                timeout,
-            )
-            # if exception not raised, sleep before next attempt
-            time.sleep(next_sleep)
+    while True:
+        with otel.start_span(span_name, span_type="attempt"):
+            try:
+                result = target()
+                if inspect.isawaitable(result):
+                    warnings.warn(_ASYNC_RETRY_WARNING)
+                return result
+
+            # pylint: disable=broad-except
+            # This function explicitly must deal with broad exceptions.
+            except Exception as exc:
+                # defer to shared logic for handling errors
+                next_sleep = _retry_error_helper(
+                    exc,
+                    deadline,
+                    sleep_iter,
+                    error_list,
+                    predicate,
+                    on_error,
+                    exception_factory,
+                    timeout,
+                )
+                # if exception not raised, sleep before next attempt
+                time.sleep(next_sleep)
 
 
 class Retry(_BaseRetry):

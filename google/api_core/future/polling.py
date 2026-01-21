@@ -18,6 +18,7 @@ import abc
 import concurrent.futures
 
 from google.api_core import exceptions
+from google.api_core import otel
 from google.api_core import retry as retries
 from google.api_core.future import _helpers
 from google.api_core.future import base
@@ -253,14 +254,19 @@ class PollingFuture(base.Future):
                 the timeout is reached before the operation completes.
         """
 
-        self._blocking_poll(timeout=timeout, retry=retry, polling=polling)
+        span_name = "PollingFuture.result"
+        if hasattr(self, "_operation") and hasattr(self._operation, "name"):
+            span_name = f"Operation:{self._operation.name}.result"
 
-        if self._exception is not None:
-            # pylint: disable=raising-bad-type
-            # Pylint doesn't recognize that this is valid in this case.
-            raise self._exception
+        with otel.start_span(span_name, span_type="polling"):
+            self._blocking_poll(timeout=timeout, retry=retry, polling=polling)
 
-        return self._result
+            if self._exception is not None:
+                # pylint: disable=raising-bad-type
+                # Pylint doesn't recognize that this is valid in this case.
+                raise self._exception
+
+            return self._result
 
     def exception(self, timeout=_DEFAULT_VALUE):
         """Get the exception from the operation, blocking if necessary.

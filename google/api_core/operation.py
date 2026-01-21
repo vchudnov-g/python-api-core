@@ -40,6 +40,7 @@ import functools
 import threading
 
 from google.api_core import exceptions
+from google.api_core import otel
 from google.api_core import protobuf_helpers
 from google.api_core.future import polling
 from google.longrunning import operations_pb2
