@@ -132,12 +132,8 @@ class _GapicCallable(object):
         # Use the name of the target if it's available, otherwise fallback to its class name.
         method_name = getattr(self._target, "__name__", self._target.__class__.__name__)
 
-        token = otel.set_baggage("method", method_name)
-        try:
-            with otel.start_span(method_name, span_type="logical"):
-                return wrapped_func(*args, **kwargs)
-        finally:
-            otel.detach_context(token)
+        with otel.start_span(method_name, span_type="logical", baggage_vars={"method": method_name}):
+            return wrapped_func(*args, **kwargs)
 
 
 def wrap_method(

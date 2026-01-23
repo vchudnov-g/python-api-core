@@ -23,13 +23,15 @@ except ImportError:
     HAS_OTEL = False
 
 @contextlib.contextmanager
-def start_span(name, attributes=None, span_type=None):
+def start_span(name, attributes=None, span_type=None, baggage_vars=None):
     """Starts a span if OpenTelemetry is available.
 
     Args:
         name (str): The name of the span.
         attributes (dict): Optional attributes to attach to the span.
         span_type (str): Optional span type (e.g., 'retry', 'operation').
+        baggage_vars (dict): Optional key-value pairs to set in the OTel baggage.
+            Keys will be prefixed with 'goog.gapic.'.
 
     Yields:
         opentelemetry.trace.Span: The started span, or None if OTel is unavailable.
@@ -38,29 +40,27 @@ def start_span(name, attributes=None, span_type=None):
         yield None
         return
 
-    tracer = trace.get_tracer("google-api-core")
-    final_attributes = attributes.copy() if attributes else {}
-    if span_type:
-        final_attributes["goog.gapic.span_type"] = span_type
+    # Get the current context and add all baggage to it.
+    current_ctx = context.get_current()
+    if baggage_vars:
+        for key, value in baggage_vars.items():
+            current_ctx = baggage.set_baggage(
+                f"goog.gapic.{key}", str(value), context=current_ctx
+            )
 
-    with tracer.start_as_current_span(name, attributes=final_attributes) as span:
-        yield span
+    # Attach the updated context.
+    token = context.attach(current_ctx)
 
-def set_baggage(key, value):
-    """Sets a value in the OpenTelemetry baggage if available.
+    try:
+        tracer = trace.get_tracer("google-api-core")
+        final_attributes = attributes.copy() if attributes else {}
+        if span_type:
+            final_attributes["goog.gapic.span_type"] = span_type
 
-    Args:
-        key (str): The baggage key (will be prefixed with 'goog.gapic.').
-        value (str): The baggage value.
-
-    Returns:
-        object: A token to detach the context, or None if OTel is unavailable.
-    """
-    if not HAS_OTEL:
-        return None
-
-    ctx = baggage.set_baggage(f"goog.gapic.{key}", str(value))
-    return context.attach(ctx)
+        with tracer.start_as_current_span(name, attributes=final_attributes) as span:
+            yield span
+    finally:
+        context.detach(token)
 
 def get_baggage(key):
     """Retrieves a value from the OpenTelemetry baggage if available.
@@ -75,12 +75,3 @@ def get_baggage(key):
         return None
 
     return baggage.get_baggage(f"goog.gapic.{key}")
-
-def detach_context(token):
-    """Detaches the context if a token is provided.
-
-    Args:
-        token (object): The token returned by set_baggage.
-    """
-    if HAS_OTEL and token:
-        context.detach(token)
