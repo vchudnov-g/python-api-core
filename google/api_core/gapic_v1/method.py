@@ -135,7 +135,7 @@ class _GapicCallable(object):
         with otel.start_span(
             method_name,
             span_kind=otel.SpanKind.INTERNAL,
-            baggage_vars={"method": method_name, "tracing": "T3 client request"},
+            attributes={"method": method_name, "tracing": "T3 client request"},
         ):
             return wrapped_func(*args, **kwargs)
 

@@ -22,21 +22,22 @@ try:
     from opentelemetry import trace, baggage, context
     from opentelemetry.trace import SpanKind, Span
     HAS_OTEL = True
+    BAGGAGE_PREFIX = "goog.gapic."
+
+    # only to get the file path:
+    import sys
+    from pathlib import Path
+    import inspect
+    import os
 except ImportError:
     HAS_OTEL = False
 
-##  TODO(Gemini):
-#     - Reread the files for both the sample apps and these repositories. I made some manual changes since the last time we chatted.
-#     - Change `span_type` below to be `span_kind` of type `SpanKind`, defauilt value INTERNAL, and set it within the context manager
-#     - Add type checking
-#     - Change the calling sites to specify `span_kind=INTERNAL` explicitly for now., replacing the span_type they were passing in. I'll change the actual value manually as needed later.
-#     - Do not delete this comment. I'll delete it manually msyelf when we're done.
 @contextlib.contextmanager
 def start_span(
     name: str,
-    attributes: Optional[Dict[str, Any]] = None,
+    attributes: Optional[Dict[str, Any]] = None,  # TODO: name this specific_attributes?
     span_kind: "SpanKind" = SpanKind.INTERNAL if HAS_OTEL else None,
-    baggage_vars: Optional[Dict[str, str]] = None,
+    baggage_vars: Optional[Dict[str, str]] = None,  # TODO: name this shared_attributes?
 ) -> Generator[Optional["Span"], None, None]:
     """Starts a span if OpenTelemetry is available.
 
@@ -60,21 +61,41 @@ def start_span(
     if baggage_vars:
         for key, value in baggage_vars.items():
             current_ctx = baggage.set_baggage(
-                f"goog.gapic.{key}", str(value), context=current_ctx
+                f"{BAGGAGE_PREFIX}{key}", str(value), context=current_ctx
             )
+
+    baggage_attributes = set_attributes_from_baggage()
 
     # Attach the updated context.
     token = context.attach(current_ctx)
 
+    final_attributes = attributes.copy() if attributes else {}
+
+    # Experimental: trace which file
+    caller_file = os.path.relpath(Path(__file__).resolve().parents[1],
+                                  sys.prefix)
+    frame_record = inspect.stack()[1] 
+    frame = frame_record[0]
+    info = inspect.getframeinfo(frame)
+    line_number = info.lineno
+    
+    final_attributes["span_start"] = f"{caller_file} @ {line_number}"
+
+    final_attributes |= baggage_attributes
+    if baggage_vars:
+        final_attributes |= baggage_vars
+
     try:
         tracer = trace.get_tracer("google-api-core")
-        final_attributes = attributes.copy() if attributes else {}
 
         with tracer.start_as_current_span(
             name, attributes=final_attributes, kind=span_kind
         ) as span:
             yield span
     finally:
+        # TODO: Maybe we copy the shared attributes here.
+        #  - May want to specific which type of span this is (t2..T5) nad have a list to copy for each
+        #  - Need to be careful with multiple child spans, if we need to aggregate data
         context.detach(token)
 
 
@@ -90,4 +111,32 @@ def get_baggage(key: str) -> Optional[str]:
     if not HAS_OTEL:
         return None
 
-    return baggage.get_baggage(f"goog.gapic.{key}")
+    return baggage.get_baggage(f"{BAGGAGE_PREFIX}{key}")
+
+# List of common attribute keys. In the dictionary COMMON_ATTRIBUTES, each key is an attribute key, and each value is the baggage key linked to the value that we will use to populate that attribute value.
+COMMON_ATTRIBUTES = {name: f"{BAGGAGE_PREFIX}{name}" for name in [
+    "gcp.client.service",
+    "gcp.client.version",
+    "gcp.client.repo",
+    "gcp.client.artifact",
+    "status.message",
+    "gcp.client.language",
+    "error.type",
+    "exception_type"
+]}
+
+def set_attributes_from_baggage():
+    new_attributes = {}
+    for attribute_key, baggage_key in COMMON_ATTRIBUTES.items():
+        baggage_value = baggage.get_baggage(baggage_key)
+        if baggage_value:
+            new_attributes[attribute_key] = baggage_value
+    return new_attributes
+
+def add_attributes_to_span(new_attributes):
+    if not HAS_OTEL:
+        return
+    current_span = trace.get_current_span()
+    if current_span.is_recording():
+        for key, value in new_attributes.items():
+            current_span.set_attribute(key, value)
