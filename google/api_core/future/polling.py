@@ -258,7 +258,7 @@ class PollingFuture(base.Future):
         if hasattr(self, "_operation") and hasattr(self._operation, "name"):
             span_name = f"Operation:{self._operation.name}.result"
 
-        with otel.start_span(span_name, span_type="polling"):
+        with otel.start_span(span_name, span_kind=otel.SpanKind.INTERNAL):
             self._blocking_poll(timeout=timeout, retry=retry, polling=polling)
 
             if self._exception is not None:

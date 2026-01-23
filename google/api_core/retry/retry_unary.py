@@ -147,7 +147,7 @@ def retry_target(
     span_name = f"{method_name}.attempt"
 
     while True:
-        with otel.start_span(span_name, span_type="attempt"):
+        with otel.start_span(span_name, span_kind=otel.SpanKind.INTERNAL):
             try:
                 result = target()
                 if inspect.isawaitable(result):
