@@ -30,6 +30,7 @@ from google.auth import credentials as ga_credentials  # type: ignore
 from google.longrunning import operations_pb2
 from google.oauth2 import service_account  # type: ignore
 import grpc
+from google.api_core import otel
 
 OptionalRetry = Union[retries.Retry, object]
 
@@ -203,13 +204,15 @@ class AbstractOperationsClient(AbstractOperationsBaseClient):
         )
 
         # Send the request.
-        response = rpc(
-            request,
-            retry=retry,
-            timeout=timeout,
-            compression=compression,
-            metadata=metadata,
-        )
+        with otel.start_span(name = f"T3.AbstractOperationsClient.list_operations",
+                             span_kind=otel.SpanKind.INTERNAL):
+            response = rpc(
+                request,
+                retry=retry,
+                timeout=timeout,
+                compression=compression,
+                metadata=metadata,
+            )
 
         # This method is paged; wrap the response in a pager, which provides
         # an `__iter__` convenience method.
@@ -266,13 +269,15 @@ class AbstractOperationsClient(AbstractOperationsBaseClient):
         )
 
         # Send the request.
-        response = rpc(
-            request,
-            retry=retry,
-            timeout=timeout,
-            compression=compression,
-            metadata=metadata,
-        )
+        with otel.start_span(name = f"T3.AbstractOperationsClient.get_operation",
+                             span_kind=otel.SpanKind.INTERNAL):
+            response = rpc(
+                request,
+                retry=retry,
+                timeout=timeout,
+                compression=compression,
+                metadata=metadata,
+            )
 
         # Done; return the response.
         return response
@@ -319,13 +324,15 @@ class AbstractOperationsClient(AbstractOperationsBaseClient):
         )
 
         # Send the request.
-        rpc(
-            request,
-            retry=retry,
-            timeout=timeout,
-            compression=compression,
-            metadata=metadata,
-        )
+        with otel.start_span(name = f"T3.AbstractOperationsClient.delete_operation",
+                             span_kind=otel.SpanKind.INTERNAL):
+            rpc(
+                request,
+                retry=retry,
+                timeout=timeout,
+                compression=compression,
+                metadata=metadata,
+            )
 
     def cancel_operation(
         self,
@@ -378,10 +385,12 @@ class AbstractOperationsClient(AbstractOperationsBaseClient):
         )
 
         # Send the request.
-        rpc(
-            request,
-            retry=retry,
-            timeout=timeout,
-            compression=compression,
-            metadata=metadata,
-        )
+        with otel.start_span(name = f"T3.AbstractOperationsClient.cancel_operation",
+                             span_kind=otel.SpanKind.INTERNAL):
+            rpc(
+                request,
+                retry=retry,
+                timeout=timeout,
+                compression=compression,
+                metadata=metadata,
+            )

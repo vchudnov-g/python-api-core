@@ -62,6 +62,8 @@ import time
 import inspect
 import warnings
 from typing import Any, Callable, Iterable, TypeVar, TYPE_CHECKING
+import traceback
+import inspect
 
 from google.api_core.retry.retry_base import _BaseRetry
 from google.api_core.retry.retry_base import _retry_error_helper
@@ -144,11 +146,19 @@ def retry_target(
     # continue trying until an attempt completes, or a terminal exception is raised in _retry_error_helper
     # TODO: support max_attempts argument: https://github.com/googleapis/python-api-core/issues/535
     method_name = otel.get_baggage("method") or "rpc"
-    span_name = f"{method_name}.attempt"
+    next_retry_number = 0
+    stack_size = len(inspect.stack())
+    indent = (stack_size-6)*" "
+    print(f"{indent} ****** new retry_target *** stack size: {stack_size}")
 
     while True:
-        with otel.start_span(span_name, span_kind=otel.SpanKind.INTERNAL):
+        with otel.start_span(name = f"T3.Retry {method_name}.attempt {next_retry_number}",
+                             span_kind=otel.SpanKind.INTERNAL,
+                             attributes={'gcp.grpc.resend_count': next_retry_number}):
             try:
+                next_retry_number += 1
+                print(f"{indent} Incremented next_retry_number: {next_retry_number}")
+                # traceback.print_stack()
                 result = target()
                 if inspect.isawaitable(result):
                     warnings.warn(_ASYNC_RETRY_WARNING)
@@ -169,7 +179,9 @@ def retry_target(
                     timeout,
                 )
                 # if exception not raised, sleep before next attempt
-                time.sleep(next_sleep)
+                with otel.start_span(name = "T5: sleep before retry",
+                                     attributes={"sleep_time": next_sleep}):
+                    time.sleep(next_sleep)
 
 
 class Retry(_BaseRetry):

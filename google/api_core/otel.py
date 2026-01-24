@@ -28,9 +28,50 @@ try:
     import sys
     from pathlib import Path
     import inspect
+    import sys
     import os
+
+    # temporary
+    import traceback
 except ImportError:
     HAS_OTEL = False
+
+
+def _get_caller_at_depth(depth=1):
+    try:
+        # depth=-1 is THIS function
+        # depth=0 is the immediate caller
+        # depth=1 is the caller's caller, etc.
+        frame = sys._getframe(depth+1)
+        info = inspect.getframeinfo(frame)
+
+        # Extract argument names and the local variables dictionary
+        args, _, _, locals_dict = inspect.getargvalues(frame)
+    
+        class_name = None
+        if args:
+            first_arg = args[0]
+            # Check if the first argument looks like a method's 'self' or 'cls'
+            if first_arg == 'self':
+                class_name = locals_dict['self'].__class__.__name__
+            elif first_arg == 'cls':
+                class_name = locals_dict['cls'].__name__
+
+        index = info.filename.find("api_core/")
+        if index == -1:
+            index = info.filename.find("google/cloud/")
+        if index == -1:
+            index = 0
+        short_filename = info.filename[index:]
+        full_function_name = f"{ f'{class_name}.' if class_name else '' }{info.function}"
+        
+        return {
+            "function": full_function_name,
+            "file_name": short_filename,
+            "line_number": info.lineno
+        }
+    except ValueError:
+        return "Depth out of range"    
 
 @contextlib.contextmanager
 def start_span(
@@ -72,15 +113,24 @@ def start_span(
     final_attributes = attributes.copy() if attributes else {}
 
     # Experimental: trace which file
-    caller_file = os.path.relpath(Path(__file__).resolve().parents[1],
-                                  sys.prefix)
-    frame_record = inspect.stack()[1] 
-    frame = frame_record[0]
-    info = inspect.getframeinfo(frame)
-    line_number = info.lineno
-    
-    final_attributes["span_start"] = f"{caller_file} @ {line_number}"
+    if True:
+        parent = _get_caller_at_depth(2)
+        grandparent = _get_caller_at_depth(3)
+        final_attributes["span_start"] = " *FROM* \n".join([f"{parent['function']} @ {parent['file_name']}:{parent['line_number']}",
+                                                    f"{grandparent['function']} @ {grandparent['file_name']}:{grandparent['line_number']}"
+                                                    ])
 
+        # print(f"*** span_start : {final_attributes['span_start']} ********************")
+        # traceback.print_stack()
+    else:
+        caller_file = os.path.relpath(Path(__file__).resolve().parents[1],
+                                      sys.prefix)
+        frame_record = inspect.stack()[1] 
+        frame = frame_record[0]
+        info = inspect.getframeinfo(frame)
+        line_number = info.lineno
+        final_attributes["span_start"] = f"{caller_file} @ {line_number}"
+    
     final_attributes |= baggage_attributes
     if baggage_vars:
         final_attributes |= baggage_vars

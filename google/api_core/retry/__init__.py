@@ -49,4 +49,5 @@ __all__ = (
     "retry_target_async",
     "retry_target_stream",
     "retry_target_stream_async",
+    "otel_start_span"
 )
