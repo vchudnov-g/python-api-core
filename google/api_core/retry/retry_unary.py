@@ -152,7 +152,7 @@ def retry_target(
     print(f"{indent} ****** new retry_target *** stack size: {stack_size}")
 
     while True:
-        with otel.start_span(name = f"T3.Retry {method_name}.attempt {next_retry_number}",
+        with otel.start_span(name = f"T3(otel:cs01).Retry {method_name}.attempt {next_retry_number}",
                              span_kind=otel.SpanKind.INTERNAL,
                              attributes={'gcp.grpc.resend_count': next_retry_number}):
             try:
@@ -179,7 +179,7 @@ def retry_target(
                     timeout,
                 )
                 # if exception not raised, sleep before next attempt
-                with otel.start_span(name = "T5: sleep before retry",
+                with otel.start_span(name = "T5(otel:cs06): sleep before retry",
                                      attributes={"sleep_time": next_sleep}):
                     time.sleep(next_sleep)
 

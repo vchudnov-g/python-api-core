@@ -133,7 +133,7 @@ class _GapicCallable(object):
         method_name = getattr(self._target, "__name__", self._target.__class__.__name__)
 
         with otel.start_span(
-            method_name,
+            f"T2(otel:cg00){method_name}",
             span_kind=otel.SpanKind.INTERNAL,
             attributes={"method": method_name, "tracing": "T3 client request"},
         ):

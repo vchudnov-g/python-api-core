@@ -204,7 +204,7 @@ class AbstractOperationsClient(AbstractOperationsBaseClient):
         )
 
         # Send the request.
-        with otel.start_span(name = f"T3.AbstractOperationsClient.list_operations",
+        with otel.start_span(name = f"T3(otel:cs02).AbstractOperationsClient.list_operations",
                              span_kind=otel.SpanKind.INTERNAL):
             response = rpc(
                 request,
@@ -269,7 +269,7 @@ class AbstractOperationsClient(AbstractOperationsBaseClient):
         )
 
         # Send the request.
-        with otel.start_span(name = f"T3.AbstractOperationsClient.get_operation",
+        with otel.start_span(name = f"T3(otel:cs03).AbstractOperationsClient.get_operation",
                              span_kind=otel.SpanKind.INTERNAL):
             response = rpc(
                 request,
@@ -324,7 +324,7 @@ class AbstractOperationsClient(AbstractOperationsBaseClient):
         )
 
         # Send the request.
-        with otel.start_span(name = f"T3.AbstractOperationsClient.delete_operation",
+        with otel.start_span(name = f"T3(otel:cs04).AbstractOperationsClient.delete_operation",
                              span_kind=otel.SpanKind.INTERNAL):
             rpc(
                 request,
@@ -385,7 +385,7 @@ class AbstractOperationsClient(AbstractOperationsBaseClient):
         )
 
         # Send the request.
-        with otel.start_span(name = f"T3.AbstractOperationsClient.cancel_operation",
+        with otel.start_span(name = f"T3(otel:cs05).AbstractOperationsClient.cancel_operation",
                              span_kind=otel.SpanKind.INTERNAL):
             rpc(
                 request,

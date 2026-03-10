@@ -254,7 +254,7 @@ class PollingFuture(base.Future):
                 the timeout is reached before the operation completes.
         """
 
-        span_name = "T3 PollingFuture.result"
+        span_name = "T3(otel:cs00) PollingFuture.result"
         # if hasattr(self, "_operation") and hasattr(self._operation, "name"):
         #    span_name = f"Operation:{self._operation.name}.result"
 
