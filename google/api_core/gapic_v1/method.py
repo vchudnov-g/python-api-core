@@ -60,6 +60,17 @@ def _apply_decorators(func, decorators):
 
     return func
 
+def otel_trace(func):
+    @functools.wraps(func)
+    def wrapper(*args, **kwargs):
+        with otel.start_span(
+                name=f"(otel:cs07) SOME METHOD",
+                span_kind=otel.SpanKind.INTERNAL,
+                attributes={"tracing": "T?? client request", "file": __file__},
+        ):
+            result = func(*args, **kwargs)
+            return result
+    return wrapper
 
 class _GapicCallable(object):
     """Callable that applies retry, timeout, and metadata logic.
@@ -113,8 +124,10 @@ class _GapicCallable(object):
         if isinstance(timeout, (int, float)):
             timeout = TimeToDeadlineTimeout(timeout=timeout)
 
+
+
         # Apply all applicable decorators.
-        wrapped_func = _apply_decorators(self._target, [retry, timeout])
+        wrapped_func = _apply_decorators(self._target, [retry, timeout, otel_trace])
 
         # Add the user agent metadata to the call.
         if self._metadata is not None:
@@ -133,9 +146,10 @@ class _GapicCallable(object):
         method_name = getattr(self._target, "__name__", self._target.__class__.__name__)
 
         with otel.start_span(
-            f"T2(otel:cg00){method_name}",
-            span_kind=otel.SpanKind.INTERNAL,
-            attributes={"method": method_name, "tracing": "T3 client request"},
+                o11y_level = 20,
+                name=f"T2(otel:cg00){method_name}",
+                span_kind=otel.SpanKind.INTERNAL,
+                attributes={"method": method_name, "tracing": "T3 client request"},
         ):
             return wrapped_func(*args, **kwargs)
 

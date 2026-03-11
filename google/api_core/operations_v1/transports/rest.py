@@ -32,6 +32,7 @@ from google.api_core import general_helpers
 from google.api_core import path_template  # type: ignore
 from google.api_core import rest_helpers  # type: ignore
 from google.api_core import retry as retries  # type: ignore
+from google.api_core import otel
 
 from .base import DEFAULT_CLIENT_INFO as BASE_DEFAULT_CLIENT_INFO
 from .base import OperationsTransport
@@ -297,17 +298,23 @@ class OperationsRestTransport(OperationsTransport):
         headers = dict(metadata)
         headers["Content-Type"] = "application/json"
         # TODO(https://github.com/googleapis/python-api-core/issues/721): Update incorrect use of `uri`` variable name.
-        response = getattr(self._session, method)(
-            "{host}{uri}".format(host=self._host, uri=uri),
-            timeout=timeout,
-            headers=headers,
-            params=rest_helpers.flatten_query_params(query_params),
-        )
+        with otel.start_span(
+                o11y_level=30,
+                name=f"T4?(otel:cg02){uri}",
+                span_kind=otel.SpanKind.INTERNAL,
+                attributes={"method": method, "tracing": "T3 client request"},
+        ):
+            response = getattr(self._session, method)(
+                "{host}{uri}".format(host=self._host, uri=uri),
+                timeout=timeout,
+                headers=headers,
+                params=rest_helpers.flatten_query_params(query_params),
+            )
 
-        # In case of error, raise the appropriate core_exceptions.GoogleAPICallError exception
-        # subclass.
-        if response.status_code >= 400:
-            raise core_exceptions.from_http_response(response)
+            # In case of error, raise the appropriate core_exceptions.GoogleAPICallError exception
+            # subclass.
+            if response.status_code >= 400:
+                raise core_exceptions.from_http_response(response)
 
         # Return the response
         api_response = operations_pb2.Operation()

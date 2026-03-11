@@ -34,7 +34,7 @@ try:
     # temporary
     import traceback
 
-    _OTEL_LEVEL = 30 # will process messages at this level and higher
+    _OTEL_LEVEL = 10 # will process messages at this level and higher
 except ImportError:
     HAS_OTEL = False
 
@@ -81,7 +81,7 @@ def start_span(
     attributes: Optional[Dict[str, Any]] = None,  # TODO: name this specific_attributes?
     span_kind: "SpanKind" = SpanKind.INTERNAL if HAS_OTEL else None,
     baggage_vars: Optional[Dict[str, str]] = None,  # TODO: name this shared_attributes?
-    o11y_level = _OTEL_LEVEL,
+    o11y_level = 30,
 ) -> Generator[Optional["Span"], None, None]:
     """Starts a span if OpenTelemetry is available.
 

@@ -254,13 +254,14 @@ class PollingFuture(base.Future):
                 the timeout is reached before the operation completes.
         """
 
-        span_name = "T3(otel:cs00) PollingFuture.result"
+        span_name = "T2(otel:cs00) Operation polling"
         # if hasattr(self, "_operation") and hasattr(self._operation, "name"):
         #    span_name = f"Operation:{self._operation.name}.result"
 
-        with otel.start_span(name = span_name,
+        with otel.start_span(o11y_level=20,
+                             name = span_name,
                              span_kind=otel.SpanKind.INTERNAL,
-                             attributes = {"operation": f"{self._operation.name if hasattr(self, '_operation') and hasattr(self._operation, 'name') else ''}"}):
+                             attributes = {"operation": f"{self._operation.name if hasattr(self, '_operation') and hasattr(self._operation, 'name') else ''}", "file": __file__}):
             self._blocking_poll(timeout=timeout, retry=retry, polling=polling)
 
             if self._exception is not None:

@@ -269,8 +269,9 @@ class AbstractOperationsClient(AbstractOperationsBaseClient):
         )
 
         # Send the request.
-        with otel.start_span(name = f"T3(otel:cs03).AbstractOperationsClient.get_operation",
-                             span_kind=otel.SpanKind.INTERNAL):
+        with otel.start_span(o11y_level = 20,
+                             name = f"(otel:cs03).AbstractOperationsClient.get_operation",
+                             span_kind=otel.SpanKind.INTERNAL, attributes={"file": __file__}):
             response = rpc(
                 request,
                 retry=retry,
