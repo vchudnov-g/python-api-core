@@ -16,7 +16,8 @@
 
 import contextlib
 
-from typing import Any, Dict, Optional, Generator
+from typing import Any, Dict, Optional, Generator, Union
+from enum import Enum
 
 try:
     from opentelemetry import trace, baggage, context
@@ -38,14 +39,54 @@ try:
 except ImportError:
     HAS_OTEL = False
 
+import threading
+
+class SemanticAttributes(Enum):
+    TRANSPORT = "rpc.system.name",
+    SPAN_ID = (),
+    PARENT_SPAN_ID = (),
+    RETRY_COUNT =  ("grpc.grpc.resend_count", "http.request.resend_count"),
+    POLLING_COUNT = ("grpc.grpc.polling_count", "http.request.polling_count"),
+    EXCEPTION_TYPE = ("exception_type", "exception_type"),
+    CLIENT_VERSION = ("gcp.client.version","gcp.client.version" )
+
+class SemanticAttributeValues(Enum):
+    TRANSPORT__GRPC = "grpc"
+    TRANSPORT__REST = "http"
+    
+
+class ChildAttributePropagator:
+    span_child_attributes = {}
+    lock = threading.Lock()
+    
+    @classmethod
+    def add_span_child_attributes(cls, new_attributes):
+        # requires PARENT_SPAN_ID
+        parent_span_id = new_attributes[SemanticAttributes.PARENT_SPAN_ID]
+        with cls.lock:
+            child_attributes = cls.span_child_attributes.get(parent_span_id, [])
+            child_attributes.append(new_attributes)
+            cls.span_child_attributes[parent_span_id] = child_attributes
+
+    @classmethod
+    def pull_attributes_for_children_of_span(cls, parent_id):
+        with cls.lock:
+            children_attributes = cls.span.child_attributes.get(parent_span_id,[]) # should this error if empty?
+            cls.span.child_attributes[parent_span_id] = []
+        return children_attributes
+    
+
 
 @contextlib.contextmanager
 def start_span(
     name: str,
-    attributes: Optional[Dict[str, Any]] = None,  # TODO: name this specific_attributes?
+    attributes: Optional[Dict[Union[str, SemanticAttributes], Any]] = None,  # TODO: name this specific_attributes?
     span_kind: "SpanKind" = SpanKind.INTERNAL if HAS_OTEL else None,
     baggage_vars: Optional[Dict[str, str]] = None,  # TODO: name this shared_attributes?
     o11y_level = 30,
+    accumulate_child_attributes = False,
+    propagate_attributes = False,
+    transport: Optional[SemanticAttributeValues] = None  # set at T4 and propagated up regardless of propagate_attrubtes
 ) -> Generator[Optional["Span"], None, None]:
     """Starts a span if OpenTelemetry is available.
 
@@ -84,19 +125,11 @@ def start_span(
         parent = _get_caller_at_depth(2)
         grandparent = _get_caller_at_depth(3)
         final_attributes["span_start"] = " *FROM* \n".join([f"{parent['function']} @ {parent['file_name']}:{parent['line_number']}",
-                                                    f"{grandparent['function']} @ {grandparent['file_name']}:{grandparent['line_number']}"
-                                                    ])
+                                                            f"{grandparent['function']} @ {grandparent['file_name']}:{grandparent['line_number']}"
+                                                            ])
 
         # print(f"*** span_start : {final_attributes['span_start']} ********************")
         # traceback.print_stack()
-    else:
-        caller_file = os.path.relpath(Path(__file__).resolve().parents[1],
-                                      sys.prefix)
-        frame_record = inspect.stack()[1] 
-        frame = frame_record[0]
-        info = inspect.getframeinfo(frame)
-        line_number = info.lineno
-        final_attributes["span_start"] = f"{caller_file} @ {line_number}"
     
     final_attributes |= baggage_attributes
     if baggage_vars:
