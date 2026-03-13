@@ -39,42 +39,6 @@ except ImportError:
     HAS_OTEL = False
 
 
-def _get_caller_at_depth(depth=1):
-    try:
-        # depth=-1 is THIS function
-        # depth=0 is the immediate caller
-        # depth=1 is the caller's caller, etc.
-        frame = sys._getframe(depth+1)
-        info = inspect.getframeinfo(frame)
-
-        # Extract argument names and the local variables dictionary
-        args, _, _, locals_dict = inspect.getargvalues(frame)
-    
-        class_name = None
-        if args:
-            first_arg = args[0]
-            # Check if the first argument looks like a method's 'self' or 'cls'
-            if first_arg == 'self':
-                class_name = locals_dict['self'].__class__.__name__
-            elif first_arg == 'cls':
-                class_name = locals_dict['cls'].__name__
-
-        index = info.filename.find("api_core/")
-        if index == -1:
-            index = info.filename.find("google/cloud/")
-        if index == -1:
-            index = 0
-        short_filename = info.filename[index:]
-        full_function_name = f"{ f'{class_name}.' if class_name else '' }{info.function}"
-        
-        return {
-            "function": full_function_name,
-            "file_name": short_filename,
-            "line_number": info.lineno
-        }
-    except ValueError:
-        return "Depth out of range"    
-
 @contextlib.contextmanager
 def start_span(
     name: str,
@@ -193,3 +157,54 @@ def add_attributes_to_span(new_attributes):
     if current_span.is_recording():
         for key, value in new_attributes.items():
             current_span.set_attribute(key, value)
+
+
+### Misc utilities ########################################
+
+def _get_caller_at_depth(depth=1):
+    """Returns a dict with developer-useful information about any of the frames on the stakck.
+
+    Args:    
+       depth: Which caller to return information on. 0 is the caller
+               of this function; 1 (default) is the caller of the
+               caller of this function, etc.
+
+    Returns: A dictwith the function name, file name, file line number of the specified caller.
+
+    Raises: ValueError if the depth is invalid.
+    """
+    try:
+        # depth=-1 is THIS function
+        # depth=0 is the immediate caller
+        # depth=1 is the caller's caller, etc.
+        frame = sys._getframe(depth+1)
+        info = inspect.getframeinfo(frame)
+
+        # Extract argument names and the local variables dictionary
+        args, _, _, locals_dict = inspect.getargvalues(frame)
+    
+        class_name = None
+        if args:
+            first_arg = args[0]
+            # Check if the first argument looks like a method's 'self' or 'cls'
+            if first_arg == 'self':
+                class_name = locals_dict['self'].__class__.__name__
+            elif first_arg == 'cls':
+                class_name = locals_dict['cls'].__name__
+
+        index = info.filename.find("api_core/")
+        if index == -1:
+            index = info.filename.find("google/cloud/")
+        if index == -1:
+            index = 0
+        short_filename = info.filename[index:]
+        full_function_name = f"{ f'{class_name}.' if class_name else '' }{info.function}"
+        
+        return {
+            "function": full_function_name,
+            "file_name": short_filename,
+            "line_number": info.lineno
+        }
+    except ValueError:
+        return "Depth out of range"
+            
