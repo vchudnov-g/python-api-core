@@ -17,7 +17,7 @@
 import contextlib
 
 from typing import Any, Dict, Optional, Generator, Union
-from enum import Enum
+from enum import Enum, auto
 
 try:
     from opentelemetry import trace, baggage, context
@@ -40,42 +40,62 @@ except ImportError:
     HAS_OTEL = False
 
 import threading
+import time
+from functools import reduce
+
 
 class SemanticAttributes(Enum):
-    TRANSPORT = "rpc.system.name",
-    SPAN_ID = (),
-    PARENT_SPAN_ID = (),
-    RETRY_COUNT =  ("grpc.grpc.resend_count", "http.request.resend_count"),
-    POLLING_COUNT = ("grpc.grpc.polling_count", "http.request.polling_count"),
-    EXCEPTION_TYPE = ("exception_type", "exception_type"),
+    TRANSPORT = auto()
+    SPAN_ID = auto()
+    DURATION = "duration"
+    PARENT_SPAN_ID = auto()
+    TRANSPORT_NAME = "rpc.system.name"
+    RETRY_COUNT =  ("grpc.grpc.resend_count", "http.request.resend_count")
+    POLLING_COUNT = ("grpc.grpc.polling_count", "http.request.polling_count")
+    EXCEPTION_TYPE = ("exception_type", "exception_type")
     CLIENT_VERSION = ("gcp.client.version","gcp.client.version" )
 
 class SemanticAttributeValues(Enum):
-    TRANSPORT__GRPC = "grpc"
-    TRANSPORT__REST = "http"
+    GRPC = "grpc"
+    REST = "http"
     
 
 class ChildAttributePropagator:
-    span_child_attributes = {}
+    # These dicts are indexed by the ID of the span that will be reading them. The name refers as to whether this data is from that span's parents or children.
+    span_child_attributes = {} # these get propagated up and possibly used by some ancestors: a list of per-child dicts
+    span_parent_attributes = {} # these get propagated down to and used by all descendants: a dict
     lock = threading.Lock()
     
     @classmethod
-    def add_span_child_attributes(cls, new_attributes):
-        # requires PARENT_SPAN_ID
-        parent_span_id = new_attributes[SemanticAttributes.PARENT_SPAN_ID]
+    def add_span_child_attributes(cls, parent_span_id, new_attributes: Dict[Any, Any]):
         with cls.lock:
             child_attributes = cls.span_child_attributes.get(parent_span_id, [])
             child_attributes.append(new_attributes)
-            cls.span_child_attributes[parent_span_id] = child_attributes
+            cls.span_child_attributes[parent_span_id] = child_attributes  
 
     @classmethod
-    def pull_attributes_for_children_of_span(cls, parent_id):
+    def pull_attributes_for_children_of_span(cls, parent_span_id):
         with cls.lock:
-            children_attributes = cls.span.child_attributes.get(parent_span_id,[]) # should this error if empty?
-            cls.span.child_attributes[parent_span_id] = []
+            children_attributes = cls.span_child_attributes.get(parent_span_id, []) # should this error if empty?
+            cls.span_child_attributes[parent_span_id] = []
         return children_attributes
-    
 
+    @classmethod
+    def add_span_parent_attributes(cls, child_span_id, new_attributes: Dict[Any, Any]):
+        with cls.lock:
+            existing_attributes = cls.span_parent_attributes.get(child_span_id, {})
+            updated_attributes = existing_attributes | new_attributes
+            cls.span_parent_attributes[child_span_id] = updated_attributes
+
+    @classmethod
+    def get_span_parent_attributes(cls, child_span_id):
+        return cls.span_parent_attributes.get(child_span_id, {})
+
+    @classmethod
+    def remove_references_to_span(cls, span_id):
+        with cls.lock:
+            cls.span_child_attributes.pop(span_id, None)
+            cls.span_parent_attributes.pop(span_id, None)
 
 @contextlib.contextmanager
 def start_span(
@@ -86,7 +106,8 @@ def start_span(
     o11y_level = 30,
     accumulate_child_attributes = False,
     propagate_attributes = False,
-    transport: Optional[SemanticAttributeValues] = None  # set at T4 and propagated up regardless of propagate_attrubtes
+    baggage_for_children = {},
+    transport: Optional[SemanticAttributeValues] = None  # set at T4 and propagated up regardless of propagate_attributes
 ) -> Generator[Optional["Span"], None, None]:
     """Starts a span if OpenTelemetry is available.
 
@@ -105,48 +126,101 @@ def start_span(
         yield None
         return
 
-    # Get the current context and add all baggage to it.
-    current_ctx = context.get_current()
-    if baggage_vars:
-        for key, value in baggage_vars.items():
-            current_ctx = baggage.set_baggage(
-                f"{BAGGAGE_PREFIX}{key}", str(value), context=current_ctx
-            )
+    print(f"*** start_span: transport=={transport}")
 
-    baggage_attributes = set_attributes_from_baggage()
+    # Get the current context: the current span is the parent of the new span created below
+    current_ctx = context.get_current()
+    parent_span_id = trace.get_current_span(current_ctx).get_span_context().span_id
+    new_parent_span_attributes = ChildAttributePropagator.get_span_parent_attributes(parent_span_id)
+    new_parent_span_attributes |= baggage_for_children # Note in doc: baggage will override
+    if transport:
+        new_parent_span_attributes[SemanticAttributes.TRANSPORT] = transport
+    transport = new_parent_span_attributes.get(SemanticAttributes.TRANSPORT, None)
 
     # Attach the updated context.
-    token = context.attach(current_ctx)
+    token = context.attach(current_ctx)  # What does this do??
 
-    final_attributes = attributes.copy() if attributes else {}
+    final_attributes = attributes.copy() if attributes else {} # unneeded?
 
     # Experimental: trace which file
-    if True:
-        parent = _get_caller_at_depth(2)
-        grandparent = _get_caller_at_depth(3)
-        final_attributes["span_start"] = " *FROM* \n".join([f"{parent['function']} @ {parent['file_name']}:{parent['line_number']}",
-                                                            f"{grandparent['function']} @ {grandparent['file_name']}:{grandparent['line_number']}"
-                                                            ])
+    parent = _get_caller_at_depth(2)
+    grandparent = _get_caller_at_depth(3)
+    final_attributes["span_start"] = " *FROM* \n".join([f"{parent['function']} @ {parent['file_name']}:{parent['line_number']}",
+                                                        f"{grandparent['function']} @ {grandparent['file_name']}:{grandparent['line_number']}"
+                                                        ])
 
-        # print(f"*** span_start : {final_attributes['span_start']} ********************")
-        # traceback.print_stack()
     
-    final_attributes |= baggage_attributes
-    if baggage_vars:
-        final_attributes |= baggage_vars
-
     try:
         tracer = trace.get_tracer("google-api-core")
 
-        with tracer.start_as_current_span(
-            name, attributes=final_attributes, kind=span_kind
-        ) as span:
-            yield span
+        with tracer.start_as_current_span(name, kind=span_kind) as new_span: # attributes=final_attributes, 
+            start_time = time.perf_counter()
+            new_span_context = new_span.get_span_context()
+            new_span_id = new_span_context.span_id
+            ChildAttributePropagator.add_span_parent_attributes(new_span_id, new_parent_span_attributes)
+            try:
+                yield new_span
+            except Exception as exception:
+                raise
+            finally:            
+                child_attribute_list = ChildAttributePropagator.pull_attributes_for_children_of_span(new_span_id)
+                all_child_attributes = merge_maps_in_order("child_attribute_list", *child_attribute_list)
+                if accumulate_child_attributes:
+                    if transport:
+                        all_child_attributes[SemanticAttributes.TRANSPORT] = transport
+                else:
+                    # maybe we can optimize this?
+                    transport = transport or all_child_attributes.get(SemanticAttributes.TRANSPORT, None)
+                    all_child_attributes = {SemanticAttributes.TRANSPORT: transport}
+                    if not transport:
+                        pass
+                        # raise ValueError(f"\n\n********** No transport defined at\n {final_attributes['span_start']}")
+                attributes_total = merge_maps_in_order("parent+final+child", new_parent_span_attributes, final_attributes, all_child_attributes)                
+                attributes_total[SemanticAttributes.SPAN_ID] = new_span_id
+                attributes_total[SemanticAttributes.PARENT_SPAN_ID] = parent_span_id
+                if propagate_attributes:
+                    ChildAttributePropagator.add_span_child_attributes(parent_span_id, attributes_total)
+                else:
+                    essential_propagation = {SemanticAttributes.TRANSPORT: attributes_total[SemanticAttributes.TRANSPORT]}
+                    ChildAttributePropagator.add_span_child_attributes(parent_span_id, essential_propagation)
+                attributes_total[SemanticAttributes.DURATION] = (time.perf_counter() - start_time) * 1000 # ms
+                set_attributes_in_span(new_span, attributes_total)
+                ChildAttributePropagator.remove_references_to_span(new_span_id)
+                
+                
     finally:
         # TODO: Maybe we copy the shared attributes here.
         #  - May want to specific which type of span this is (t2..T5) nad have a list to copy for each
-        #  - Need to be careful with multiple child spans, if we need to aggregate data
+        #  - Need to be careful with multiple child spans, if we need to aggregate data        
         context.detach(token)
+
+def set_attributes_in_span(span, attributes):
+    print(f"=== transport key: {SemanticAttributes.TRANSPORT_NAME.value}, transport enum value: {attributes[SemanticAttributes.TRANSPORT]}")
+    span.set_attribute(SemanticAttributes.TRANSPORT_NAME.value,
+                       attributes[SemanticAttributes.TRANSPORT].value if attributes[SemanticAttributes.TRANSPORT] else "(!!none!!)")
+    transport = attributes.get(SemanticAttributes.TRANSPORT, None)
+    if transport is SemanticAttributeValues.GRPC:
+        transport_idx = 0
+    elif transport is SemanticAttributeValues.REST:
+        transport_idx = 1
+    
+        
+    for semantic_attribute, value in attributes.items():
+        if isinstance(semantic_attribute, SemanticAttributes):
+            literal_attribute = semantic_attribute.value
+            if not literal_attribute or isinstance(literal_attribute, int):
+                continue
+            if isinstance(literal_attribute, tuple) and len(tuple) == 2:
+                if transport_idx is None:
+                    raise ValueError(f"Unset transport {transport}")
+                literal_attribute = literal_attribute[transport_idx]
+        else:
+            literal_attribute = semantic_attribute
+
+        if literal_attribute and isinstance(literal_attribute, str):
+            span.set_attribute(literal_attribute, value)
+        else:
+            error(f"Unknown literal attribute type {literal_attribute} for semantic attribute {semantic_attribute}")
 
 
 def get_baggage(key: str) -> Optional[str]:
@@ -219,7 +293,7 @@ def _get_caller_at_depth(depth=1):
         class_name = None
         if args:
             first_arg = args[0]
-            # Check if the first argument looks like a method's 'self' or 'cls'
+            # Check if the first arguma.valueent looks like a method's 'self' or 'cls'
             if first_arg == 'self':
                 class_name = locals_dict['self'].__class__.__name__
             elif first_arg == 'cls':
@@ -241,3 +315,7 @@ def _get_caller_at_depth(depth=1):
     except ValueError:
         return "Depth out of range"
             
+def merge_maps_in_order(label, *all_maps):
+    retval = reduce(lambda one, two: {**one, **two}, all_maps) if all_maps else {}
+    print(f"\n*** merge_maps_in_order[{label}]: {all_maps}\n                    types: {[type(one_map) for one_map in all_maps]}\n                     —→ {retval}\n")
+    return retval

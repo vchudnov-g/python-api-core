@@ -47,4 +47,5 @@ check_dependency_versions("google.api_core")
 
 from google.api_core import otel
 otel_start_span = otel.start_span
-
+SemanticAttributeValues = otel.SemanticAttributeValues
+SemanticAttributes = otel.SemanticAttributes
