@@ -261,7 +261,11 @@ class PollingFuture(base.Future):
         with otel.start_span(o11y_level=20,
                              name = span_name,
                              span_kind=otel.SpanKind.INTERNAL,
-                             attributes = {"operation": f"{self._operation.name if hasattr(self, '_operation') and hasattr(self._operation, 'name') else ''}", "file": __file__}):
+                             attributes = {"operation": f"{self._operation.name if hasattr(self, '_operation') and hasattr(self._operation, 'name') else ''}",
+                                           "file": __file__},
+                             baggage_for_children = {
+                                 # otel.SemanticAttributes.REPEAT: otel.SemanticAttributeValues.REPEAT_POLLING.value
+                             }):
             self._blocking_poll(timeout=timeout, retry=retry, polling=polling)
 
             if self._exception is not None:

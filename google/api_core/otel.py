@@ -46,9 +46,11 @@ from functools import reduce
 
 class SemanticAttributes(Enum):
     TRANSPORT = auto()
-    SPAN_ID = auto()
-    DURATION = "duration"
-    PARENT_SPAN_ID = auto()
+    SPAN_ID = auto()  # "__span_id" # auto()
+    DURATION = "duration_ms"
+    REPEAT = auto()
+    REPEAT_COUNT = auto()  # "__repeat_count" # auto()
+    PARENT_SPAN_ID = auto()  # "__parent_span_id" # auto()
     TRANSPORT_NAME = "rpc.system.name"
     RETRY_COUNT =  ("grpc.grpc.resend_count", "http.request.resend_count")
     POLLING_COUNT = ("grpc.grpc.polling_count", "http.request.polling_count")
@@ -58,6 +60,8 @@ class SemanticAttributes(Enum):
 class SemanticAttributeValues(Enum):
     GRPC = "grpc"
     REST = "http"
+    REPEAT_RETRY = auto()
+    REPEAT_POLLING = auto()
     
 
 class ChildAttributePropagator:
@@ -104,9 +108,9 @@ def start_span(
     span_kind: "SpanKind" = SpanKind.INTERNAL if HAS_OTEL else None,
     baggage_vars: Optional[Dict[str, str]] = None,  # TODO: name this shared_attributes?
     o11y_level = 30,
-    accumulate_child_attributes = False,
-    propagate_attributes = False,
-    baggage_for_children = {},
+    accumulate_child_attributes = False,  # receive from children
+    propagate_attributes = False,   # send to parent
+    baggage_for_children = {},  # send to children
     transport: Optional[SemanticAttributeValues] = None  # set at T4 and propagated up regardless of propagate_attributes
 ) -> Generator[Optional["Span"], None, None]:
     """Starts a span if OpenTelemetry is available.
@@ -171,7 +175,7 @@ def start_span(
                 else:
                     # maybe we can optimize this?
                     transport = transport or all_child_attributes.get(SemanticAttributes.TRANSPORT, None)
-                    all_child_attributes = {SemanticAttributes.TRANSPORT: transport}
+                    all_child_attributes = {SemanticAttributes.TRANSPORT:  transport}  # always propagate TRANSPORT even if nothing else
                     if not transport:
                         print(f"\n********** No transport defined at\n {final_attributes['span_start']}")
                         # raise ValueError(f"\n\n********** No transport defined at\n {final_attributes['span_start']}")
@@ -181,7 +185,7 @@ def start_span(
                 if propagate_attributes:
                     ChildAttributePropagator.add_span_child_attributes(parent_span_id, attributes_total)
                 else:
-                    essential_propagation = {SemanticAttributes.TRANSPORT: attributes_total[SemanticAttributes.TRANSPORT]}
+                    essential_propagation = {SemanticAttributes.TRANSPORT: attributes_total[SemanticAttributes.TRANSPORT]} # simplify flow above
                     ChildAttributePropagator.add_span_child_attributes(parent_span_id, essential_propagation)
                 attributes_total[SemanticAttributes.DURATION] = (time.perf_counter() - start_time) * 1000 # ms
                 set_attributes_in_span(new_span, attributes_total)
@@ -195,7 +199,7 @@ def start_span(
         context.detach(token)
 
 def set_attributes_in_span(span, attributes):
-    # print(f"=== transport key: {SemanticAttributes.TRANSPORT_NAME.value}, transport enum value: {attributes[SemanticAttributes.TRANSPORT]}")
+    print(f"=== transport key: {SemanticAttributes.TRANSPORT_NAME.value}, transport enum value: {attributes[SemanticAttributes.TRANSPORT]}")
     span.set_attribute(SemanticAttributes.TRANSPORT_NAME.value,
                        attributes[SemanticAttributes.TRANSPORT].value if attributes[SemanticAttributes.TRANSPORT] else "(!!none!!)")
     transport = attributes.get(SemanticAttributes.TRANSPORT, None)
@@ -204,17 +208,18 @@ def set_attributes_in_span(span, attributes):
         transport_idx = 0
     elif transport is SemanticAttributeValues.REST:
         transport_idx = 1
-    
+    else:
+        transport_idx = None
         
     for semantic_attribute, value in attributes.items():
         if isinstance(semantic_attribute, SemanticAttributes):
             literal_attribute = semantic_attribute.value
             if not literal_attribute or isinstance(literal_attribute, int):
                 continue
-            if isinstance(literal_attribute, tuple) and len(tuple) == 2:
-                if transport_idx is None:
-                    raise ValueError(f"Unset transport {transport}")
-                literal_attribute = literal_attribute[transport_idx]
+            if isinstance(literal_attribute, tuple) and len(literal_attribute) == 2:
+                if False and transport_idx is None: #disable for now
+                    raise ValueError(f"Unset transport '{transport}' when trying to set {semantic_attribute}:{value} ")
+                literal_attribute = literal_attribute[transport_idx] if transport_idx is not None else f"no_transport_{semantic_attribute.name}"
         else:
             literal_attribute = semantic_attribute
 

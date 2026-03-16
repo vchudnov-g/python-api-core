@@ -156,7 +156,9 @@ def retry_target(
                                      if next_retry_number > 0
                                      else f"T3(otel:cs01) {method_name}"),
                              span_kind=otel.SpanKind.INTERNAL,
-                             attributes={'gcp.grpc.resend_count': next_retry_number}):
+                             # if we could determine here whether we're polling, we could set the right field
+                             attributes={otel.SemanticAttributes.RETRY_COUNT: next_retry_number}
+                             ):
             try:
                 next_retry_number += 1
                 print(f"{indent} Incremented next_retry_number: {next_retry_number}")
