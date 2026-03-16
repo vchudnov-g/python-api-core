@@ -53,7 +53,7 @@ class SemanticAttributes(Enum):
     RETRY_COUNT =  ("grpc.grpc.resend_count", "http.request.resend_count")
     POLLING_COUNT = ("grpc.grpc.polling_count", "http.request.polling_count")
     EXCEPTION_TYPE = ("exception_type", "exception_type")
-    CLIENT_VERSION = ("gcp.client.version","gcp.client.version" )
+    CLIENT_VERSION = "gcp.client.version"
 
 class SemanticAttributeValues(Enum):
     GRPC = "grpc"
@@ -126,7 +126,7 @@ def start_span(
         yield None
         return
 
-    print(f"*** start_span: transport=={transport}")
+    # print(f"*** start_span: transport=={transport}")
 
     # Get the current context: the current span is the parent of the new span created below
     current_ctx = context.get_current()
@@ -173,7 +173,7 @@ def start_span(
                     transport = transport or all_child_attributes.get(SemanticAttributes.TRANSPORT, None)
                     all_child_attributes = {SemanticAttributes.TRANSPORT: transport}
                     if not transport:
-                        pass
+                        print(f"\n********** No transport defined at\n {final_attributes['span_start']}")
                         # raise ValueError(f"\n\n********** No transport defined at\n {final_attributes['span_start']}")
                 attributes_total = merge_maps_in_order("parent+final+child", new_parent_span_attributes, final_attributes, all_child_attributes)                
                 attributes_total[SemanticAttributes.SPAN_ID] = new_span_id
@@ -195,10 +195,11 @@ def start_span(
         context.detach(token)
 
 def set_attributes_in_span(span, attributes):
-    print(f"=== transport key: {SemanticAttributes.TRANSPORT_NAME.value}, transport enum value: {attributes[SemanticAttributes.TRANSPORT]}")
+    # print(f"=== transport key: {SemanticAttributes.TRANSPORT_NAME.value}, transport enum value: {attributes[SemanticAttributes.TRANSPORT]}")
     span.set_attribute(SemanticAttributes.TRANSPORT_NAME.value,
                        attributes[SemanticAttributes.TRANSPORT].value if attributes[SemanticAttributes.TRANSPORT] else "(!!none!!)")
     transport = attributes.get(SemanticAttributes.TRANSPORT, None)
+    # print(f"\n*** transport is {transport}; which codes as {attributes[SemanticAttributes.TRANSPORT].value if attributes[SemanticAttributes.TRANSPORT] else 'none'}\n")
     if transport is SemanticAttributeValues.GRPC:
         transport_idx = 0
     elif transport is SemanticAttributeValues.REST:
@@ -317,5 +318,5 @@ def _get_caller_at_depth(depth=1):
             
 def merge_maps_in_order(label, *all_maps):
     retval = reduce(lambda one, two: {**one, **two}, all_maps) if all_maps else {}
-    print(f"\n*** merge_maps_in_order[{label}]: {all_maps}\n                    types: {[type(one_map) for one_map in all_maps]}\n                     —→ {retval}\n")
+    # print(f"\n*** merge_maps_in_order[{label}]: {all_maps}\n                    types: {[type(one_map) for one_map in all_maps]}\n                     —→ {retval}\n")
     return retval
