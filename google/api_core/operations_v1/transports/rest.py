@@ -302,7 +302,8 @@ class OperationsRestTransport(OperationsTransport):
                 o11y_level=30,
                 name=f"T4?(otel:cg02){uri}",
                 span_kind=otel.SpanKind.INTERNAL,
-                attributes={"method": method, "tracing": "T3 client request"},
+                attributes={"method": method, "tracing": "T4 client request"},
+                transport=otel.SemanticAttributeValues.REST,
         ):
             response = getattr(self._session, method)(
                 "{host}{uri}".format(host=self._host, uri=uri),

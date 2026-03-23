@@ -161,7 +161,8 @@ def start_span(
             start_time = time.perf_counter()
             new_span_context = new_span.get_span_context()
             new_span_id = new_span_context.span_id
-            ChildAttributePropagator.add_span_parent_attributes(new_span_id, new_parent_span_attributes)
+            print(f" Starting {new_span_id:x} from parent_span {parent_span_id:x}({getattr(trace.get_current_span(current_ctx), 'name', '--none--')})")
+            ChildAttributePropagator.add_span_parent_attributes(new_span_id, new_parent_span_attributes) # to propagate from new_span to its children
             try:
                 yield new_span
             except Exception as exception:
@@ -187,6 +188,16 @@ def start_span(
                 else:
                     essential_propagation = {SemanticAttributes.TRANSPORT: attributes_total[SemanticAttributes.TRANSPORT]} # simplify flow above
                     ChildAttributePropagator.add_span_child_attributes(parent_span_id, essential_propagation)
+
+                # some attributes we need to proagate to parent in a way that they become available to siblings:
+                # TODO: make this special case more elegant
+                if transport is not None:
+                    print(f" From span {new_span_id:x}: Setting in parent_span {parent_span_id:x}({getattr(trace.get_current_span(current_ctx), 'name', '--none--')}): TRANSPORT=={transport}")
+                    ChildAttributePropagator.add_span_parent_attributes(parent_span_id, {SemanticAttributes.TRANSPORT: transport})
+                else:
+                    print(f" From span {new_span_id:x}: NO TRANSPORT TO SET in parent_span {parent_span_id:x}({getattr(trace.get_current_span(current_ctx), 'name', '--none--')})")
+                    
+                
                 attributes_total[SemanticAttributes.DURATION] = (time.perf_counter() - start_time) * 1000 # ms
                 set_attributes_in_span(new_span, attributes_total)
                 ChildAttributePropagator.remove_references_to_span(new_span_id)
@@ -199,8 +210,9 @@ def start_span(
         context.detach(token)
 
 def set_attributes_in_span(span, attributes):
+    suffix = ""  # f"--[{span.get_span_context().span_id:x}/{span.name}]"
     print(f"=== transport key: {SemanticAttributes.TRANSPORT_NAME.value}, transport enum value: {attributes[SemanticAttributes.TRANSPORT]}")
-    span.set_attribute(SemanticAttributes.TRANSPORT_NAME.value,
+    span.set_attribute(f"{SemanticAttributes.TRANSPORT_NAME.value}{suffix}",
                        attributes[SemanticAttributes.TRANSPORT].value if attributes[SemanticAttributes.TRANSPORT] else "(!!none!!)")
     transport = attributes.get(SemanticAttributes.TRANSPORT, None)
     # print(f"\n*** transport is {transport}; which codes as {attributes[SemanticAttributes.TRANSPORT].value if attributes[SemanticAttributes.TRANSPORT] else 'none'}\n")
@@ -219,12 +231,12 @@ def set_attributes_in_span(span, attributes):
             if isinstance(literal_attribute, tuple) and len(literal_attribute) == 2:
                 if False and transport_idx is None: #disable for now
                     raise ValueError(f"Unset transport '{transport}' when trying to set {semantic_attribute}:{value} ")
-                literal_attribute = literal_attribute[transport_idx] if transport_idx is not None else f"no_transport_{semantic_attribute.name}"
+                literal_attribute = literal_attribute[transport_idx] if transport_idx is not None else f"NO_TRANSPORT_{semantic_attribute.name}"
         else:
             literal_attribute = semantic_attribute
 
         if literal_attribute and isinstance(literal_attribute, str):
-            span.set_attribute(literal_attribute, value)
+            span.set_attribute(f"{literal_attribute}{suffix}", value)
         else:
             error(f"Unknown literal attribute type {literal_attribute} for semantic attribute {semantic_attribute}")
 
