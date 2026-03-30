@@ -264,7 +264,7 @@ class PollingFuture(base.Future):
                              attributes = {"operation": f"{self._operation.name if hasattr(self, '_operation') and hasattr(self._operation, 'name') else ''}",
                                            "file": __file__},
                              baggage_for_children = {
-                                 # otel.SemanticAttributes.REPEAT: otel.SemanticAttributeValues.REPEAT_POLLING.value
+                                 otel.SemanticAttributes.REPEAT: otel.SemanticAttributeValues.REPEAT_POLLING
                              }):
             self._blocking_poll(timeout=timeout, retry=retry, polling=polling)
 

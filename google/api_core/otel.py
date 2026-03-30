@@ -104,14 +104,15 @@ class ChildAttributePropagator:
 @contextlib.contextmanager
 def start_span(
     name: str,
-    attributes: Optional[Dict[Union[str, SemanticAttributes], Any]] = None,  # TODO: name this specific_attributes?
+    attributes: Optional[Dict[Union[str, SemanticAttributes], Any]] = {},  # TODO: name this specific_attributes?
     span_kind: "SpanKind" = SpanKind.INTERNAL if HAS_OTEL else None,
     baggage_vars: Optional[Dict[str, str]] = None,  # TODO: name this shared_attributes?
     o11y_level = 30,
     accumulate_child_attributes = False,  # receive from children
     propagate_attributes = False,   # send to parent
     baggage_for_children = {},  # send to children
-    transport: Optional[SemanticAttributeValues] = None  # set at T4 and propagated up regardless of propagate_attributes
+    transport: Optional[SemanticAttributeValues] = None,  # set at T4 and propagated up regardless of propagate_attributes
+    repeat_type = SemanticAttributeValues.REPEAT_RETRY
 ) -> Generator[Optional["Span"], None, None]:
     """Starts a span if OpenTelemetry is available.
 
@@ -149,7 +150,7 @@ def start_span(
     # Experimental: trace which file
     parent = _get_caller_at_depth(2)
     grandparent = _get_caller_at_depth(3)
-    final_attributes["span_start"] = " *FROM* \n".join([f"{parent['function']} @ {parent['file_name']}:{parent['line_number']}",
+    final_attributes["_span_start"] = " *FROM* \n".join([f"{parent['function']} @ {parent['file_name']}:{parent['line_number']}",
                                                         f"{grandparent['function']} @ {grandparent['file_name']}:{grandparent['line_number']}"
                                                         ])
 
@@ -178,19 +179,31 @@ def start_span(
                     transport = transport or all_child_attributes.get(SemanticAttributes.TRANSPORT, None)
                     all_child_attributes = {SemanticAttributes.TRANSPORT:  transport}  # always propagate TRANSPORT even if nothing else
                     if not transport:
-                        print(f"\n********** No transport defined at\n {final_attributes['span_start']}")
-                        # raise ValueError(f"\n\n********** No transport defined at\n {final_attributes['span_start']}")
+                        print(f"\n********** No transport defined at\n {final_attributes['_span_start']}")
+                        # raise ValueError(f"\n\n********** No transport defined at\n {final_attributes['_span_start']}")
                 attributes_total = merge_maps_in_order("parent+final+child", new_parent_span_attributes, final_attributes, all_child_attributes)                
                 attributes_total[SemanticAttributes.SPAN_ID] = new_span_id
                 attributes_total[SemanticAttributes.PARENT_SPAN_ID] = parent_span_id
+                
+                # override the repeat type that may have been propagated up from children
+                this_repeat_type = attributes.get(SemanticAttributes.REPEAT, None)
+                if this_repeat_type:
+                    attributes_total[SemanticAttributes.REPEAT] = this_repeat_type
+                # attributes_total[SemanticAttributes.REPEAT] = repeat_type
+                
                 if propagate_attributes:
                     ChildAttributePropagator.add_span_child_attributes(parent_span_id, attributes_total)
                 else:
-                    essential_propagation = {SemanticAttributes.TRANSPORT: attributes_total[SemanticAttributes.TRANSPORT]} # simplify flow above
+                    # simplify flow above
+                    essential_propagation = {
+                        SemanticAttributes.TRANSPORT: attributes_total[SemanticAttributes.TRANSPORT],
+                    }                   
+                    if this_repeat_type:
+                        essential_propagation[SemanticAttributes.REPEAT] = this_repeat_type
                     ChildAttributePropagator.add_span_child_attributes(parent_span_id, essential_propagation)
 
                 # some attributes we need to proagate to parent in a way that they become available to siblings:
-                # TODO: make this special case more elegant
+                # TODO: make this special case more elegant: propagates to siblings
                 if transport is not None:
                     print(f" From span {new_span_id:x}: Setting in parent_span {parent_span_id:x}({getattr(trace.get_current_span(current_ctx), 'name', '--none--')}): TRANSPORT=={transport}")
                     ChildAttributePropagator.add_span_parent_attributes(parent_span_id, {SemanticAttributes.TRANSPORT: transport})
@@ -211,6 +224,19 @@ def start_span(
 
 def set_attributes_in_span(span, attributes):
     suffix = ""  # f"--[{span.get_span_context().span_id:x}/{span.name}]"
+    if attributes.get(SemanticAttributes.REPEAT_COUNT, None) is not None:
+        repeat_type=attributes[SemanticAttributes.REPEAT]
+        if repeat_type == SemanticAttributeValues.REPEAT_RETRY:
+            include_attribute = SemanticAttributes.RETRY_COUNT
+            exclude_attribute = SemanticAttributes.POLLING_COUNT
+        elif repeat_type == SemanticAttributeValues.REPEAT_POLLING:
+            include_attribute = SemanticAttributes.POLLING_COUNT
+            exclude_attribute = SemanticAttributes.RETRY_COUNT
+        else:
+            raise ValueError(f"Should not get here: unknown repeat type {repeat_type}")
+        attributes[include_attribute] = attributes[SemanticAttributes.REPEAT_COUNT]
+        attributes.pop(exclude_attribute, None)
+
     print(f"=== transport key: {SemanticAttributes.TRANSPORT_NAME.value}, transport enum value: {attributes[SemanticAttributes.TRANSPORT]}")
     span.set_attribute(f"{SemanticAttributes.TRANSPORT_NAME.value}{suffix}",
                        attributes[SemanticAttributes.TRANSPORT].value if attributes[SemanticAttributes.TRANSPORT] else "(!!none!!)")
@@ -239,6 +265,7 @@ def set_attributes_in_span(span, attributes):
             span.set_attribute(f"{literal_attribute}{suffix}", value)
         else:
             error(f"Unknown literal attribute type {literal_attribute} for semantic attribute {semantic_attribute}")
+        span.set_attribute("_this_span_id", f"{span.get_span_context().span_id:x}")
 
 
 def get_baggage(key: str) -> Optional[str]:

@@ -157,8 +157,10 @@ def retry_target(
                                      else f"T3(otel:cs01) {method_name}"),
                              span_kind=otel.SpanKind.INTERNAL,
                              # if we could determine here whether we're polling, we could set the right field
-                             attributes={otel.SemanticAttributes.RETRY_COUNT: next_retry_number}
-                             ):
+                             attributes={otel.SemanticAttributes.REPEAT_COUNT: next_retry_number},
+                             baggage_for_children = {
+                                 otel.SemanticAttributes.REPEAT: otel.SemanticAttributeValues.REPEAT_RETRY
+                             }):
             try:
                 next_retry_number += 1
                 print(f"{indent} Incremented next_retry_number: {next_retry_number}")
