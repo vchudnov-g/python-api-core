@@ -263,6 +263,7 @@ class PollingFuture(base.Future):
                              span_kind=otel.SpanKind.INTERNAL,
                              attributes = {"operation": f"{self._operation.name if hasattr(self, '_operation') and hasattr(self._operation, 'name') else ''}",
                                            "file": __file__},
+                             # we want to ensure the next level of retries are recorded as polling
                              baggage_for_children = {
                                  otel.SemanticAttributes.REPEAT: otel.SemanticAttributeValues.REPEAT_POLLING
                              }):

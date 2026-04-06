@@ -93,7 +93,7 @@ class ChildAttributePropagator:
 
     @classmethod
     def get_span_parent_attributes(cls, child_span_id):
-        return cls.span_parent_attributes.get(child_span_id, {})
+        return cls.span_parent_attributes.get(child_span_id, {}).copy()
 
     @classmethod
     def remove_references_to_span(cls, span_id):
@@ -133,24 +133,33 @@ def start_span(
 
     # print(f"*** start_span: transport=={transport}")
 
+    # For clarity, we'll give each span a name. In genealogical order:
+    #    span_aa: the parent of the caller's span
+    #    span_bb: the caller's span
+    #    span_cc: the new span this context manager creates
+    #    span_dd: any of the child spans of span_cc
+
     # Get the current context: the current span is the parent of the new span created below
     current_ctx = context.get_current()
-    parent_span_id = trace.get_current_span(current_ctx).get_span_context().span_id
-    new_parent_span_attributes = ChildAttributePropagator.get_span_parent_attributes(parent_span_id)
-    new_parent_span_attributes |= baggage_for_children # Note in doc: baggage will override
+    span_bb_id = trace.get_current_span(current_ctx).get_span_context().span_id
+    span_cc_inherited_attributes = ChildAttributePropagator.get_span_parent_attributes(span_bb_id)
     if transport:
-        new_parent_span_attributes[SemanticAttributes.TRANSPORT] = transport
-    transport = new_parent_span_attributes.get(SemanticAttributes.TRANSPORT, None)
+        span_cc_inherited_attributes[SemanticAttributes.TRANSPORT] = transport
+    span_dd_inherited_attributes = span_cc_inherited_attributes |  baggage_for_children # TODO: Note in doc: baggage will override
+
+    # Update transport if it was changed by the span_dd attributes
+    # TODO: Needed? NO: prohibit baggage_for_children from having TRANSPORT
+    transport = span_dd_inherited_attributes.get(SemanticAttributes.TRANSPORT, None)
 
     # Attach the updated context.
     token = context.attach(current_ctx)  # What does this do??
 
-    final_attributes = attributes.copy() if attributes else {} # unneeded?
+    span_cc_initial_attributes = span_cc_inherited_attributes | attributes  # TODO: Document attributes overrides
 
     # Experimental: trace which file
     parent = _get_caller_at_depth(2)
     grandparent = _get_caller_at_depth(3)
-    final_attributes["_span_start"] = " *FROM* \n".join([f"{parent['function']} @ {parent['file_name']}:{parent['line_number']}",
+    span_cc_initial_attributes["_span_start"] = " *FROM* \n".join([f"{parent['function']} @ {parent['file_name']}:{parent['line_number']}",
                                                         f"{grandparent['function']} @ {grandparent['file_name']}:{grandparent['line_number']}"
                                                         ])
 
@@ -158,62 +167,63 @@ def start_span(
     try:
         tracer = trace.get_tracer("google-api-core")
 
-        with tracer.start_as_current_span(name, kind=span_kind) as new_span: # attributes=final_attributes, 
+        with tracer.start_as_current_span(name, kind=span_kind) as span_cc: # attributes=span_cc_initial_attributes, 
             start_time = time.perf_counter()
-            new_span_context = new_span.get_span_context()
-            new_span_id = new_span_context.span_id
-            print(f" Starting {new_span_id:x} from parent_span {parent_span_id:x}({getattr(trace.get_current_span(current_ctx), 'name', '--none--')})")
-            ChildAttributePropagator.add_span_parent_attributes(new_span_id, new_parent_span_attributes) # to propagate from new_span to its children
+            span_cc_context = span_cc.get_span_context()
+            span_cc_id = span_cc_context.span_id
+            print(f" Starting {span_cc_id:x} from parent_span {span_bb_id:x}({getattr(trace.get_current_span(current_ctx), 'name', '--none--')})")
+            ChildAttributePropagator.add_span_parent_attributes(span_cc_id, span_dd_inherited_attributes) # to propagate from span_cc to its children
             try:
-                yield new_span
+                yield span_cc
             except Exception as exception:
                 raise
             finally:            
-                child_attribute_list = ChildAttributePropagator.pull_attributes_for_children_of_span(new_span_id)
-                all_child_attributes = merge_maps_in_order("child_attribute_list", *child_attribute_list)
+                list_span_dd_attributes = ChildAttributePropagator.pull_attributes_for_children_of_span(span_cc_id)
+                all_span_dd_attributes = merge_maps_in_order("list_span_dd_attributes", *list_span_dd_attributes)
                 if accumulate_child_attributes:
                     if transport:
-                        all_child_attributes[SemanticAttributes.TRANSPORT] = transport
+                        all_span_dd_attributes[SemanticAttributes.TRANSPORT] = transport
                 else:
                     # maybe we can optimize this?
-                    transport = transport or all_child_attributes.get(SemanticAttributes.TRANSPORT, None)
-                    all_child_attributes = {SemanticAttributes.TRANSPORT:  transport}  # always propagate TRANSPORT even if nothing else
+                    transport = transport or all_span_dd_attributes.get(SemanticAttributes.TRANSPORT, None)
+                    all_span_dd_attributes = {SemanticAttributes.TRANSPORT:  transport}  # always propagate TRANSPORT even if nothing else
                     if not transport:
-                        print(f"\n********** No transport defined at\n {final_attributes['_span_start']}")
-                        # raise ValueError(f"\n\n********** No transport defined at\n {final_attributes['_span_start']}")
-                attributes_total = merge_maps_in_order("parent+final+child", new_parent_span_attributes, final_attributes, all_child_attributes)                
-                attributes_total[SemanticAttributes.SPAN_ID] = new_span_id
-                attributes_total[SemanticAttributes.PARENT_SPAN_ID] = parent_span_id
+                        print(f"\n********** No transport defined at\n {span_cc_initial_attributes['_span_start']}")
+                        # raise ValueError(f"\n\n********** No transport defined at\n {span_cc_initial_attributes['_span_start']}")
+                span_cc_final_attributes = merge_maps_in_order("parent+final+child", span_cc_initial_attributes, all_span_dd_attributes)                
+                span_cc_final_attributes[SemanticAttributes.SPAN_ID] = span_cc_id
+                span_cc_final_attributes[SemanticAttributes.PARENT_SPAN_ID] = span_bb_id
                 
-                # override the repeat type that may have been propagated up from children
-                this_repeat_type = attributes.get(SemanticAttributes.REPEAT, None)
+                # override the repeat type that may have been propagated up from span_dds with whatever was inherited by or explicitly set in span_cc
+                this_repeat_type = span_cc_initial_attributes.get(SemanticAttributes.REPEAT, None)
+                print(f"** this_repeat_type: {this_repeat_type}")
                 if this_repeat_type:
-                    attributes_total[SemanticAttributes.REPEAT] = this_repeat_type
-                # attributes_total[SemanticAttributes.REPEAT] = repeat_type
+                    span_cc_final_attributes[SemanticAttributes.REPEAT] = this_repeat_type
+                # span_cc_final_attributes[SemanticAttributes.REPEAT] = repeat_type
                 
                 if propagate_attributes:
-                    ChildAttributePropagator.add_span_child_attributes(parent_span_id, attributes_total)
+                    ChildAttributePropagator.add_span_child_attributes(span_bb_id, span_cc_final_attributes)
                 else:
                     # simplify flow above
                     essential_propagation = {
-                        SemanticAttributes.TRANSPORT: attributes_total[SemanticAttributes.TRANSPORT],
+                        SemanticAttributes.TRANSPORT: span_cc_final_attributes[SemanticAttributes.TRANSPORT],
                     }                   
-                    if this_repeat_type:
-                        essential_propagation[SemanticAttributes.REPEAT] = this_repeat_type
-                    ChildAttributePropagator.add_span_child_attributes(parent_span_id, essential_propagation)
+                    if this_repeat_type:                        
+                        essential_propagation[SemanticAttributes.REPEAT] = span_cc_final_attributes[SemanticAttributes.REPEAT]
+                    ChildAttributePropagator.add_span_child_attributes(span_bb_id, essential_propagation)
 
                 # some attributes we need to proagate to parent in a way that they become available to siblings:
                 # TODO: make this special case more elegant: propagates to siblings
                 if transport is not None:
-                    print(f" From span {new_span_id:x}: Setting in parent_span {parent_span_id:x}({getattr(trace.get_current_span(current_ctx), 'name', '--none--')}): TRANSPORT=={transport}")
-                    ChildAttributePropagator.add_span_parent_attributes(parent_span_id, {SemanticAttributes.TRANSPORT: transport})
+                    print(f" From span {span_cc_id:x}: Setting in parent_span {span_bb_id:x}({getattr(trace.get_current_span(current_ctx), 'name', '--none--')}): TRANSPORT=={transport}")
+                    ChildAttributePropagator.add_span_parent_attributes(span_bb_id, {SemanticAttributes.TRANSPORT: transport})
                 else:
-                    print(f" From span {new_span_id:x}: NO TRANSPORT TO SET in parent_span {parent_span_id:x}({getattr(trace.get_current_span(current_ctx), 'name', '--none--')})")
+                    print(f" From span {span_cc_id:x}: NO TRANSPORT TO SET in parent_span {span_bb_id:x}({getattr(trace.get_current_span(current_ctx), 'name', '--none--')})")
                     
                 
-                attributes_total[SemanticAttributes.DURATION] = (time.perf_counter() - start_time) * 1000 # ms
-                set_attributes_in_span(new_span, attributes_total)
-                ChildAttributePropagator.remove_references_to_span(new_span_id)
+                span_cc_final_attributes[SemanticAttributes.DURATION] = (time.perf_counter() - start_time) * 1000 # ms
+                set_attributes_in_span(span_cc, span_cc_final_attributes)
+                ChildAttributePropagator.remove_references_to_span(span_cc_id)
                 
                 
     finally:
@@ -223,18 +233,29 @@ def start_span(
         context.detach(token)
 
 def set_attributes_in_span(span, attributes):
-    suffix = ""  # f"--[{span.get_span_context().span_id:x}/{span.name}]"
-    if attributes.get(SemanticAttributes.REPEAT_COUNT, None) is not None:
-        repeat_type=attributes[SemanticAttributes.REPEAT]
-        if repeat_type == SemanticAttributeValues.REPEAT_RETRY:
+    label = f"--[{span.get_span_context().span_id:x}/{span.name}]"
+    suffix = ""  # label
+    repeat_count = attributes.get(SemanticAttributes.REPEAT_COUNT, None)
+    if repeat_count is not None:
+        repeat_type=attributes.get(SemanticAttributes.REPEAT, None)
+
+        # NOTES:        
+        # 1. Since REPEAT_POLLING is always explicitly set, but REPEAT_RETRY is not always
+        #    explicitly set, we default to the latter. See retry_unary.py vs polling.py.
+        # 2. Since REPEAT_RETRY is the number of *re*tries, the first call is the first try, so the
+        #    RETRY_COUNT starts at 0. RETRY_POLLING is the total number of polling calls, including
+        #    this one, so POLLING_COUNT starts at 1. This is why we use fix_count.
+        if (not repeat_type) or (repeat_type == SemanticAttributeValues.REPEAT_RETRY):
             include_attribute = SemanticAttributes.RETRY_COUNT
             exclude_attribute = SemanticAttributes.POLLING_COUNT
+            fix_count = 0
         elif repeat_type == SemanticAttributeValues.REPEAT_POLLING:
             include_attribute = SemanticAttributes.POLLING_COUNT
             exclude_attribute = SemanticAttributes.RETRY_COUNT
+            fix_count = 1
         else:
-            raise ValueError(f"Should not get here: unknown repeat type {repeat_type}")
-        attributes[include_attribute] = attributes[SemanticAttributes.REPEAT_COUNT]
+            raise ValueError(f"Should not get here: unknown repeat type {repeat_type} when count=={repeat_count} :: {label}")
+        attributes[include_attribute] = attributes[SemanticAttributes.REPEAT_COUNT] + fix_count
         attributes.pop(exclude_attribute, None)
 
     print(f"=== transport key: {SemanticAttributes.TRANSPORT_NAME.value}, transport enum value: {attributes[SemanticAttributes.TRANSPORT]}")
@@ -266,6 +287,8 @@ def set_attributes_in_span(span, attributes):
         else:
             error(f"Unknown literal attribute type {literal_attribute} for semantic attribute {semantic_attribute}")
         span.set_attribute("_this_span_id", f"{span.get_span_context().span_id:x}")
+    # Clear REPEAT_COUNT so it doesn't get reprocessed
+    attributes[SemanticAttributes.REPEAT_COUNT] = None
 
 
 def get_baggage(key: str) -> Optional[str]:

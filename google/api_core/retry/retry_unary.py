@@ -158,6 +158,7 @@ def retry_target(
                              span_kind=otel.SpanKind.INTERNAL,
                              # if we could determine here whether we're polling, we could set the right field
                              attributes={otel.SemanticAttributes.REPEAT_COUNT: next_retry_number},
+                             # if this repeat is at the polling level, we want to ensure repeats later int he stack get recorded as retries
                              baggage_for_children = {
                                  otel.SemanticAttributes.REPEAT: otel.SemanticAttributeValues.REPEAT_RETRY
                              }):
