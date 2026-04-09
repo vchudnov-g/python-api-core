@@ -109,7 +109,7 @@ def start_span(
     baggage_vars: Optional[Dict[str, str]] = None,  # TODO: name this shared_attributes?
     o11y_level = 30,
     accumulate_child_attributes = False,  # receive from children
-    propagate_attributes = False,   # send to parent
+    propagate_attributes = True, #False,   # send to parent
     baggage_for_children = {},  # send to children
     transport: Optional[SemanticAttributeValues] = None,  # set at T4 and propagated up regardless of propagate_attributes
     repeat_type = SemanticAttributeValues.REPEAT_RETRY
@@ -159,7 +159,7 @@ def start_span(
     # Experimental: trace which file
     parent = _get_caller_at_depth(2)
     grandparent = _get_caller_at_depth(3)
-    span_cc_initial_attributes["_span_start"] = " *FROM* \n".join([f"{parent['function']} @ {parent['file_name']}:{parent['line_number']}",
+    span_cc_initial_attributes["_span_start"] = name + " *FROM* ".join([f"{parent['function']} @ {parent['file_name']}:{parent['line_number']}",
                                                         f"{grandparent['function']} @ {grandparent['file_name']}:{grandparent['line_number']}"
                                                         ])
 
@@ -178,18 +178,34 @@ def start_span(
             except Exception as exception:
                 raise
             finally:            
-                list_span_dd_attributes = ChildAttributePropagator.pull_attributes_for_children_of_span(span_cc_id)
-                all_span_dd_attributes = merge_maps_in_order("list_span_dd_attributes", *list_span_dd_attributes)
-                if accumulate_child_attributes:
-                    if transport:
-                        all_span_dd_attributes[SemanticAttributes.TRANSPORT] = transport
+                if True or accumulate_child_attributes:  # need to ensure we get transport from children!
+                    list_span_dd_attributes = ChildAttributePropagator.pull_attributes_for_children_of_span(span_cc_id)
+                    all_span_dd_attributes = merge_maps_in_order("list_span_dd_attributes", *list_span_dd_attributes)
                 else:
-                    # maybe we can optimize this?
-                    transport = transport or all_span_dd_attributes.get(SemanticAttributes.TRANSPORT, None)
-                    all_span_dd_attributes = {SemanticAttributes.TRANSPORT:  transport}  # always propagate TRANSPORT even if nothing else
-                    if not transport:
-                        print(f"\n********** No transport defined at\n {span_cc_initial_attributes['_span_start']}")
-                        # raise ValueError(f"\n\n********** No transport defined at\n {span_cc_initial_attributes['_span_start']}")
+                    all_span_dd_attributes = {}
+
+                # Ensure we always propagate TRANSPORT even if nothing else, and that we use any
+                # explicitly set transport value in span_cc
+
+                transport_for_cc = transport or all_span_dd_attributes.get(SemanticAttributes.TRANSPORT, None)
+                if False:
+                    # this is the intended code, but trying out an alternative to see whether it behaves better
+                    all_span_dd_attributes[SemanticAttributes.TRANSPORT] = transport_for_cc
+                else:
+                    if transport_for_cc:
+                        all_span_dd_attributes[SemanticAttributes.TRANSPORT] = transport_for_cc
+                transport_for_bb = transport_for_cc  # I think we can just use transport_for_cc below
+                        
+
+
+                # FIXME: Most spans get a transport attribute, but in my test runs, even after I get
+                # a result from the servers, some additional spans are created for retry and polling
+                # and these don't make it down to the T4-level methods and thus do not get a
+                # transport.
+                if not transport_for_cc:
+                    print(f"\n********** No transport defined at\n {span_cc_initial_attributes['_span_start']}")
+                    # raise ValueError(f"\n\n********** No transport defined at\n {span_cc_initial_attributes['_span_start']}")
+                    
                 span_cc_final_attributes = merge_maps_in_order("parent+final+child", span_cc_initial_attributes, all_span_dd_attributes)                
                 span_cc_final_attributes[SemanticAttributes.SPAN_ID] = span_cc_id
                 span_cc_final_attributes[SemanticAttributes.PARENT_SPAN_ID] = span_bb_id
@@ -204,19 +220,19 @@ def start_span(
                 if propagate_attributes:
                     ChildAttributePropagator.add_span_child_attributes(span_bb_id, span_cc_final_attributes)
                 else:
-                    # simplify flow above
-                    essential_propagation = {
-                        SemanticAttributes.TRANSPORT: span_cc_final_attributes[SemanticAttributes.TRANSPORT],
-                    }                   
-                    if this_repeat_type:                        
-                        essential_propagation[SemanticAttributes.REPEAT] = span_cc_final_attributes[SemanticAttributes.REPEAT]
+                    essential_propagation = {}
+                    if transport_for_bb:
+                        essential_propagation[SemanticAttributes.TRANSPORT]= transport_for_bb
+                    repeat_type_for_bb = span_cc_final_attributes.get(SemanticAttributes.REPEAT, None)
+                    if repeat_type_for_bb:
+                        essential_propagation[SemanticAttributes.REPEAT] = repeat_type_for_bb
                     ChildAttributePropagator.add_span_child_attributes(span_bb_id, essential_propagation)
 
-                # some attributes we need to proagate to parent in a way that they become available to siblings:
+                # We need to propagate some attributes to span_bb to propagate to siblingg span_cc's.
                 # TODO: make this special case more elegant: propagates to siblings
-                if transport is not None:
-                    print(f" From span {span_cc_id:x}: Setting in parent_span {span_bb_id:x}({getattr(trace.get_current_span(current_ctx), 'name', '--none--')}): TRANSPORT=={transport}")
-                    ChildAttributePropagator.add_span_parent_attributes(span_bb_id, {SemanticAttributes.TRANSPORT: transport})
+                if transport_for_bb is not None:
+                    print(f" From span {span_cc_id:x}: Setting in parent_span {span_bb_id:x}({getattr(trace.get_current_span(current_ctx), 'name', '--none--')}): TRANSPORT=={transport_for_bb}")
+                    ChildAttributePropagator.add_span_parent_attributes(span_bb_id, {SemanticAttributes.TRANSPORT: transport_for_bb})
                 else:
                     print(f" From span {span_cc_id:x}: NO TRANSPORT TO SET in parent_span {span_bb_id:x}({getattr(trace.get_current_span(current_ctx), 'name', '--none--')})")
                     
@@ -256,11 +272,11 @@ def set_attributes_in_span(span, attributes):
         else:
             raise ValueError(f"Should not get here: unknown repeat type {repeat_type} when count=={repeat_count} :: {label}")
         attributes[include_attribute] = attributes[SemanticAttributes.REPEAT_COUNT] + fix_count
-        attributes.pop(exclude_attribute, None)
+        # attributes.pop(exclude_attribute, None)
 
-    print(f"=== transport key: {SemanticAttributes.TRANSPORT_NAME.value}, transport enum value: {attributes[SemanticAttributes.TRANSPORT]}")
+    print(f"=== transport key: {SemanticAttributes.TRANSPORT_NAME.value}, transport enum value: {attributes.get(SemanticAttributes.TRANSPORT, None)}")
     span.set_attribute(f"{SemanticAttributes.TRANSPORT_NAME.value}{suffix}",
-                       attributes[SemanticAttributes.TRANSPORT].value if attributes[SemanticAttributes.TRANSPORT] else "(!!none!!)")
+                       attributes[SemanticAttributes.TRANSPORT].value if attributes.get(SemanticAttributes.TRANSPORT, None) else "(!!none!!)")
     transport = attributes.get(SemanticAttributes.TRANSPORT, None)
     # print(f"\n*** transport is {transport}; which codes as {attributes[SemanticAttributes.TRANSPORT].value if attributes[SemanticAttributes.TRANSPORT] else 'none'}\n")
     if transport is SemanticAttributeValues.GRPC:
