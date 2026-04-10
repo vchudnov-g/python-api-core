@@ -177,25 +177,18 @@ def start_span(
                 yield span_cc
             except Exception as exception:
                 raise
-            finally:            
-                if True or accumulate_child_attributes:  # need to ensure we get transport from children!
-                    list_span_dd_attributes = ChildAttributePropagator.pull_attributes_for_children_of_span(span_cc_id)
-                    all_span_dd_attributes = merge_maps_in_order("list_span_dd_attributes", *list_span_dd_attributes)
-                else:
+            finally:
+                list_span_dd_attributes = ChildAttributePropagator.pull_attributes_for_children_of_span(span_cc_id)
+                all_span_dd_attributes = merge_maps_in_order("list_span_dd_attributes", *list_span_dd_attributes)
+                span_dd_transport = all_span_dd_attributes.get(SemanticAttributes.TRANSPORT, None)
+
+                if not accumulate_child_attributes:
                     all_span_dd_attributes = {}
 
-                # Ensure we always propagate TRANSPORT even if nothing else, and that we use any
+                # Ensure we always propagate TRANSPORT to span_bb even if nothing else, and that we use any
                 # explicitly set transport value in span_cc
-
-                transport_for_cc = transport or all_span_dd_attributes.get(SemanticAttributes.TRANSPORT, None)
-                if False:
-                    # this is the intended code, but trying out an alternative to see whether it behaves better
-                    all_span_dd_attributes[SemanticAttributes.TRANSPORT] = transport_for_cc
-                else:
-                    if transport_for_cc:
-                        all_span_dd_attributes[SemanticAttributes.TRANSPORT] = transport_for_cc
+                transport_for_cc = transport or span_dd_transport
                 transport_for_bb = transport_for_cc  # I think we can just use transport_for_cc below
-                        
 
 
                 # FIXME: Most spans get a transport attribute, but in my test runs, even after I get
@@ -209,7 +202,9 @@ def start_span(
                 span_cc_final_attributes = merge_maps_in_order("parent+final+child", span_cc_initial_attributes, all_span_dd_attributes)                
                 span_cc_final_attributes[SemanticAttributes.SPAN_ID] = span_cc_id
                 span_cc_final_attributes[SemanticAttributes.PARENT_SPAN_ID] = span_bb_id
-                
+                if transport_for_cc:  # TODO: could we set this unconditionally?
+                        span_cc_final_attributes[SemanticAttributes.TRANSPORT] = transport_for_cc
+                        
                 # override the repeat type that may have been propagated up from span_dds with whatever was inherited by or explicitly set in span_cc
                 this_repeat_type = span_cc_initial_attributes.get(SemanticAttributes.REPEAT, None)
                 print(f"** this_repeat_type: {this_repeat_type}")
@@ -224,11 +219,11 @@ def start_span(
                     if transport_for_bb:
                         essential_propagation[SemanticAttributes.TRANSPORT]= transport_for_bb
                     repeat_type_for_bb = span_cc_final_attributes.get(SemanticAttributes.REPEAT, None)
-                    if repeat_type_for_bb:
+                    if this_repeat_type:  # repeat_type_for_bb:  # TODO: could we set this unconditionally?
                         essential_propagation[SemanticAttributes.REPEAT] = repeat_type_for_bb
                     ChildAttributePropagator.add_span_child_attributes(span_bb_id, essential_propagation)
 
-                # We need to propagate some attributes to span_bb to propagate to siblingg span_cc's.
+                # We need to propagate some attributes to span_bb to propagate to sibling span_cc's.
                 # TODO: make this special case more elegant: propagates to siblings
                 if transport_for_bb is not None:
                     print(f" From span {span_cc_id:x}: Setting in parent_span {span_bb_id:x}({getattr(trace.get_current_span(current_ctx), 'name', '--none--')}): TRANSPORT=={transport_for_bb}")
